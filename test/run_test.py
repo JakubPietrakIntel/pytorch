@@ -943,7 +943,7 @@ def get_selected_tests(options):
         which_shard, num_shards = options.shard
         assert which_shard <= num_shards, "Selected shard must be less than or equal to total number of shards"
         assert num_shards <= len(selected_tests), f"Number of shards must be less than {len(selected_tests)}"
-        if which_shard != 1:
+        if which_shard != "1":
             selected_tests = [x for x in selected_tests if x not in PYTEST_INCOMPATIBLE]
 
     # skip all distributed tests if distributed package is not available.
@@ -1000,7 +1000,6 @@ def main():
         selected_tests = get_reordered_tests(selected_tests)
         # downloading test cases configuration to local environment
         get_test_case_configs(dirpath=test_directory)
-    selected_tests = [x for x in selected_tests if x not in PYTEST_INCOMPATIBLE]
     has_failed = False
     failure_messages = []
     try:
