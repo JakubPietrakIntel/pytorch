@@ -996,7 +996,7 @@ def main():
     if options.coverage and not PYTORCH_COLLECT_COVERAGE:
         shell(["coverage", "erase"])
 
-    if IS_CI:
+    if IS_CI and HAVE_TEST_SELECTION_TOOLS:
         selected_tests = get_reordered_tests(selected_tests)
         # downloading test cases configuration to local environment
         get_test_case_configs(dirpath=test_directory)
