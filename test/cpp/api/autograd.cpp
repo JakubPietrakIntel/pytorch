@@ -218,26 +218,40 @@ TEST(AutogradAPITests, AnomalyMode) {
     ASSERT_TRUE(
         warnings.str().find("Traceback of forward") != std::string::npos);
   }
-  {
-    WarningCapture warnings;
-    // Double backward
+  auto double_backward_produce_nan = [](bool should_throw) {
     auto x = torch::tensor({0.0}, torch::requires_grad());
     auto y = x.pow(1.5);
     auto gr =
         // NOLINTNEXTLINE(bugprone-argument-comment)
         grad({y}, {x}, {}, /*retain_graph=*/true, /*create_backward=*/true);
-    ASSERT_THROWS_WITH(grad({gr[0]}, {x}, {torch::tensor({0.0})});
-                       , "returned nan");
-    auto msgs = warnings.messages();
-    ASSERT_EQ(msgs.size(), 2);
-    ASSERT_TRUE(
-        msgs[0].find("Traceback of forward call that caused the error") !=
-        std::string::npos);
-    ASSERT_TRUE(
-        msgs[1].find(
-            "Traceback of forward call that induced the previous calculation") !=
-        std::string::npos);
+    if (should_throw) {
+      WarningCapture warnings;
+      ASSERT_THROWS_WITH(grad({gr[0]}, {x}, {torch::tensor({0.0})});
+                         , "returned nan");
+      auto msgs = warnings.messages();
+      ASSERT_EQ(msgs.size(), 2);
+      ASSERT_TRUE(
+          msgs[0].find("Traceback of forward call that caused the error") !=
+          std::string::npos);
+      ASSERT_TRUE(
+          msgs[1].find(
+              "Traceback of forward call that induced the previous calculation") !=
+          std::string::npos);
+    } else {
+      grad({gr[0]}, {x}, {torch::tensor({0.0})});
+    }
+  };
+
+  double_backward_produce_nan(true);
+  {
+    torch::autograd::DetectAnomalyGuard detect_anomaly(/*check_nan=*/false);
+    double_backward_produce_nan(false);
+    {
+      torch::autograd::DetectAnomalyGuard detect_anomaly(/*check_nan=*/true);
+      double_backward_produce_nan(true);
+    }
   }
+  double_backward_produce_nan(true);
 }
 
 TEST(CustomAutogradTest, CustomFunction) {
@@ -1200,19 +1214,19 @@ std::tuple<torch::Tensor, torch::Tensor, int64_t> ret_tuple_non_tensor(
 }
 
 torch::Tensor view_op(const torch::Tensor& self) {
-  return self;
+  return self.alias();
 }
 
 torch::Tensor view_op_with_extra_arg(
     const torch::Tensor& self,
     const torch::Tensor& other) {
-  return self;
+  return self.alias();
 }
 
 std::vector<torch::Tensor> ret_tensor_vector_view(
     const torch::Tensor& self,
     const torch::Tensor& other) {
-  return {self, self};
+  return {self.alias(), self.alias()};
 }
 
 std::vector<at::Tensor> ret_tensor_vector(

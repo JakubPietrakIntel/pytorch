@@ -159,6 +159,7 @@ DONT_REQUIRE_DERIVATIVE = {
     "logical_or",
     # This function returns nested_tensor shape as a tensor that is non-differentiable
     "_nested_tensor_size",
+    "_nested_tensor_strides",
 }
 
 # The C -> R functions at the time of adding this are still being audited and tested
@@ -537,6 +538,7 @@ DONT_ENFORCE_TENSOR_IMPL_USE_COUNT = {
     # Nested Tensors related functions
     # _nested_tensor_size() should never actually be called with requires_grad=True tensor
     "_nested_tensor_size",
+    "_nested_tensor_strides",
 }
 
 DONT_ENFORCE_STORAGE_IMPL_USE_COUNT = {
@@ -734,7 +736,8 @@ def gen_variable_type(
     fm.write(
         "VariableType.h",
         lambda: {
-            "generated_comment": "@" f"generated from {template_path}/VariableType.h"
+            "generated_comment": "@"
+            + f"generated from {fm.template_dir_for_comments()}/VariableType.h"
         },
     )
 
@@ -788,7 +791,8 @@ def gen_variable_type(
         [fn for fn in fns_with_diff_infos if use_derived(fn)],
         key_fn=lambda fn: cpp.name(fn.func.func),
         base_env={
-            "generated_comment": "@" f"generated from {template_path}/VariableType.cpp",
+            "generated_comment": "@"
+            + f"generated from {fm.template_dir_for_comments()}/VariableType.cpp",
         },
         env_callable=gen_variable_type_func,
         num_shards=5,
@@ -809,7 +813,7 @@ def gen_variable_type_func(
     fn: NativeFunctionWithDifferentiabilityInfo,
 ) -> Dict[str, List[str]]:
     f = fn.func
-    result = dict()
+    result = {}
     with native_function_manager(f):
         name = cpp.name(f.func)
         formals = gen_formals(f)
@@ -849,7 +853,9 @@ def gen_variable_type_func(
             if not fn.info:
                 key = "Default"
                 type_definition = METHOD_DEFINITION.substitute(
-                    return_type=cpp.returns_type(f.func.returns).cpp_type(),
+                    return_type=cpp.returns_type(
+                        f.func.returns, symint=True
+                    ).cpp_type(),
                     type_wrapper_name=type_wrapper_name(f, key),
                     type_definition_body=emit_body(fn, key),
                     formals=formals,
@@ -860,7 +866,9 @@ def gen_variable_type_func(
             else:
                 for key, _ in fn.info.items():
                     type_definition = METHOD_DEFINITION.substitute(
-                        return_type=cpp.returns_type(f.func.returns).cpp_type(),
+                        return_type=cpp.returns_type(
+                            f.func.returns, symint=True
+                        ).cpp_type(),
                         type_wrapper_name=type_wrapper_name(f, key),
                         type_definition_body=emit_body(fn, key),
                         formals=formals,
@@ -913,7 +921,7 @@ def emit_body(
         # TODO: `cpp_type` is only to keep it byte-for-byte compatible with the old codegen, should remove.
         # NB: This is not a clone of cpp.argument() - TensorOptionsArguments / faithful / binds are
         # not handled properly as they are irrelevant for this codegen.
-        cpp_type = cpp.argument_type(a, binds=a.name).cpp_type()
+        cpp_type = cpp.argument_type(a, binds=a.name, symint=True).cpp_type()
 
         if not is_differentiable(a.name, a.type, info):
             return None
@@ -1204,6 +1212,7 @@ def emit_body(
             api_name=cpp.name(
                 f.func,
                 faithful_name_for_out_overloads=True,
+                symint_overload=f.func.has_symint(),
             ),
             unpacked_args=[dispatch_key_set] + list(unpacked_args),
         )
@@ -1285,7 +1294,7 @@ def emit_body(
             for i, (ret, ret_name) in enumerate(
                 zip(f.func.returns, cpp.return_names(f))
             ):
-                noref_cpp_type = cpp.return_type(ret).remove_const_ref()
+                noref_cpp_type = cpp.return_type(ret, symint=True).remove_const_ref()
                 if noref_cpp_type == BaseCType(tensorT):
                     if aliased_arg_name is not None:
                         assert (
