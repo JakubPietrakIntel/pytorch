@@ -23,8 +23,11 @@ from torch.ao.quantization.qconfig import (
     qconfig_equals,
 )
 from torch.ao.quantization.stubs import DeQuantStub
-from torch.ao.quantization.utils import activation_is_statically_quantized
-from torch.ao.quantization.quantize import is_activation_post_process
+from torch.ao.quantization.utils import (
+    activation_is_statically_quantized,
+)
+from torch.ao.quantization.observer import _is_activation_post_process
+from torch.ao.quantization.qconfig_mapping import QConfigMapping
 
 from torch.fx import GraphModule, map_arg
 
@@ -37,6 +40,7 @@ from .custom_config import PrepareCustomConfig
 from ._decomposed import quantized_decomposed_lib  # noqa: F401
 
 from typing import Callable, Optional, List, Dict, Any, Set, Tuple, Union, Type
+from dataclasses import dataclass
 from collections import namedtuple
 import operator
 import warnings
@@ -64,14 +68,29 @@ __all__ = [
     "NON_OBSERVABLE_ARG_DICT",
     "NON_QUANTIZABLE_WEIGHT_OPS",
     "return_arg_list",
+    "ObservedGraphModuleAttrs",
 ]
 
 NON_QUANTIZABLE_WEIGHT_OPS = {torch.nn.functional.layer_norm, torch.nn.functional.group_norm, torch.nn.functional.instance_norm}
 
+@dataclass
+class ObservedGraphModuleAttrs:
+    node_name_to_qconfig: Dict[str, QConfigAny]
+    node_name_to_scope: Dict[str, Tuple[str, type]]
+    prepare_custom_config: PrepareCustomConfig
+    equalization_node_name_to_qconfig: Dict[str, Any]
+    qconfig_mapping: QConfigMapping
+    is_qat: bool
+    observed_node_names: Set[str]
+    is_observed_standalone_module: bool = False
+    standalone_module_input_quantized_idxs: Optional[List[int]] = None
+    standalone_module_output_quantized_idxs: Optional[List[int]] = None
+
 def node_arg_is_weight(node: Node, arg: Any, backend_config: BackendConfig) -> bool:
     """Returns if node arg is weight"""
-    if isinstance(node, Node) and node.op == "call_function" and node.target in backend_config.configs:
-        weight_index = backend_config.configs[node.target]._input_type_to_index.get("weight")
+    if isinstance(node, Node) and node.op == "call_function" and \
+            node.target in backend_config._pattern_complex_format_to_config:
+        weight_index = backend_config._pattern_complex_format_to_config[node.target]._input_type_to_index.get("weight")
         if weight_index is not None and weight_index < len(node.args) and node.args[weight_index] is arg:
             return True
         return node.kwargs.get("weight") is arg
@@ -79,8 +98,9 @@ def node_arg_is_weight(node: Node, arg: Any, backend_config: BackendConfig) -> b
 
 def node_arg_is_bias(node: Node, arg: Any, backend_config: BackendConfig) -> bool:
     """Returns if node arg is bias"""
-    if isinstance(node, Node) and node.op == "call_function" and node.target in backend_config.configs:
-        bias_index = backend_config.configs[node.target]._input_type_to_index.get("bias")
+    if isinstance(node, Node) and node.op == "call_function" and \
+            node.target in backend_config._pattern_complex_format_to_config:
+        bias_index = backend_config._pattern_complex_format_to_config[node.target]._input_type_to_index.get("bias")
         if bias_index is not None and bias_index < len(node.args) and node.args[bias_index] is arg:
             return True
         return node.kwargs.get("bias") is arg
@@ -248,7 +268,7 @@ def all_node_args_have_no_tensors(node: Node, modules: Dict[str, torch.nn.Module
         result = False
     elif node.op == 'call_module':
         assert isinstance(node.target, str)
-        if is_activation_post_process(modules[node.target]):
+        if _is_activation_post_process(modules[node.target]):
             result = all_node_args_have_no_tensors(node.args[0], modules, cache)  # type: ignore[arg-type]
     elif node.op == 'call_module':
         result = False
@@ -825,7 +845,7 @@ def _qconfig_satisfies_dtype_config_constraints(
     satisfies_constraints = True
     if activation_post_process_ctr is not None:
         activation_post_process = activation_post_process_ctr()
-        assert is_activation_post_process(activation_post_process)
+        assert _is_activation_post_process(activation_post_process)
         # If dtypes don't match, don't check the activation_post_process and return True early
         if activation_post_process.dtype != dtype_with_constraints.dtype:
             return True

@@ -14,19 +14,19 @@ class TestAOMigrationQuantization(AOMigrationTestCase):
             '_propagate_qconfig_helper',
             '_remove_activation_post_process',
             '_remove_qconfig',
-            'add_observer_',
+            '_add_observer_',
             'add_quant_dequant',
             'convert',
-            'get_observer_dict',
-            'get_unique_devices_',
-            'is_activation_post_process',
+            '_get_observer_dict',
+            '_get_unique_devices_',
+            '_is_activation_post_process',
             'prepare',
             'prepare_qat',
             'propagate_qconfig_',
             'quantize',
             'quantize_dynamic',
             'quantize_qat',
-            'register_activation_post_process_hook',
+            '_register_activation_post_process_hook',
             'swap_module',
         ]
         self._test_function_import('quantize', function_list)
@@ -271,7 +271,7 @@ class TestAOMigrationNNQuantized(AOMigrationTestCase):
             '_ntuple_from_first',
             '_pair_from_first',
             '_quantize_weight',
-            'hide_packed_params_repr',
+            '_hide_packed_params_repr',
             'WeightedQuantizedModule',
         ]
         self._test_function_import('utils', function_list,
@@ -478,11 +478,6 @@ class TestAOMigrationNNIntrinsic(AOMigrationTestCase):
         self._test_function_import('linear_relu', function_list,
                                    base='nn.intrinsic.qat.modules')
 
-    def test_package_import_nn_intrinsic_quantized(self):
-        r"""Tests the migration of the torch.nn.intrinsic.quantized"""
-        self._test_package_import('quantized', base='nn.intrinsic')
-        self._test_package_import('quantized.modules', base='nn.intrinsic')
-
     def test_modules_import_nn_intrinsic_quantized(self):
         module_list = [
             'BNReLU2d',
@@ -517,3 +512,9 @@ class TestAOMigrationNNIntrinsic(AOMigrationTestCase):
         ]
         self._test_function_import('linear_relu', function_list,
                                    base='nn.intrinsic.quantized.modules')
+
+    def test_modules_no_import_nn_intrinsic_quantized_dynamic(self):
+        # TODO(future PR): generalize this
+        import torch
+        _ = torch.ao.nn.intrinsic.quantized.dynamic
+        _ = torch.nn.intrinsic.quantized.dynamic

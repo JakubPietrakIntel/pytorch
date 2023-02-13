@@ -5,8 +5,8 @@ import numpy as np
 import os
 import shutil
 import sys
+import tempfile
 import unittest
-import uuid
 import expecttest
 
 TEST_TENSORBOARD = True
@@ -60,12 +60,14 @@ class BaseTestCase(TestCase):
         self.temp_dirs = []
 
     def createSummaryWriter(self):
-        temp_dir = str(uuid.uuid4())
+        # Just to get the name of the directory in a writable place. tearDown()
+        # is responsible for clean-ups.
+        temp_dir = tempfile.TemporaryDirectory(prefix="test_tensorboard").name
         self.temp_dirs.append(temp_dir)
         return SummaryWriter(temp_dir)
 
     def tearDown(self):
-        super(BaseTestCase, self).tearDown()
+        super().tearDown()
         # Remove directories created by SummaryWriter
         for temp_dir in self.temp_dirs:
             if os.path.exists(temp_dir):
@@ -287,11 +289,10 @@ class TestTensorBoardSummaryWriter(BaseTestCase):
 
     def test_pathlib(self):
         import pathlib
-        p = pathlib.Path('./pathlibtest' + str(uuid.uuid4()))
-        with SummaryWriter(p) as writer:
-            writer.add_scalar('test', 1)
-        import shutil
-        shutil.rmtree(str(p))
+        with tempfile.TemporaryDirectory(prefix="test_tensorboard_pathlib") as d:
+            p = pathlib.Path(d)
+            with SummaryWriter(p) as writer:
+                writer.add_scalar('test', 1)
 
 class TestTensorBoardEmbedding(BaseTestCase):
     def test_embedding(self):
@@ -516,7 +517,7 @@ def get_expected_file(function_ptr):
 
 def read_expected_content(function_ptr):
     expected_file = get_expected_file(function_ptr)
-    assert os.path.exists(expected_file)
+    assert os.path.exists(expected_file), expected_file
     with open(expected_file, "r") as f:
         return f.read()
 
@@ -561,7 +562,7 @@ class TestTensorBoardPytorchGraph(BaseTestCase):
 
         class myLinear(torch.nn.Module):
             def __init__(self):
-                super(myLinear, self).__init__()
+                super().__init__()
                 self.l = torch.nn.Linear(3, 5)
 
             def forward(self, x):
@@ -681,7 +682,7 @@ class TestTensorBoardPytorchGraph(BaseTestCase):
         # the add_graph call and still continue.
         class myMLP(torch.nn.Module):
             def __init__(self):
-                super(myMLP, self).__init__()
+                super().__init__()
                 self.input_len = 1 * 28 * 28
                 self.fc1 = torch.nn.Linear(self.input_len, 1200)
                 self.fc2 = torch.nn.Linear(1200, 1200)

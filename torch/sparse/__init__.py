@@ -18,6 +18,7 @@ else:
 
 __all__ = [
     'addmm',
+    'check_sparse_tensor_invariants',
     'mm',
     'sum',
     'softmax',
@@ -61,41 +62,65 @@ mm = _add_docstr(_sparse._sparse_mm, r"""
 .. note::
     This function doesn't support computing derivaties with respect to CSR matrices.
 
-    Args:
-        mat1 (Tensor): the first sparse matrix to be multiplied
-        mat2 (Tensor): the second matrix to be multiplied, which could be sparse or dense
+    This function also additionally accepts an optional :attr:`reduce` argument that allows
+    specification of an optional reduction operation, mathematically performs the following operation:
 
-    Shape:
-        The format of the output tensor of this function follows:
-        - sparse x sparse -> sparse
-        - sparse x dense -> dense
+.. math::
 
-    Example::
+    z_{ij} = \bigoplus_{k = 0}^{K - 1} x_{ik} y_{kj}
 
-        >>> a = torch.randn(2, 3).to_sparse().requires_grad_(True)
-        >>> a
-        tensor(indices=tensor([[0, 0, 0, 1, 1, 1],
-                               [0, 1, 2, 0, 1, 2]]),
-               values=tensor([ 1.5901,  0.0183, -0.6146,  1.8061, -0.0112,  0.6302]),
-               size=(2, 3), nnz=6, layout=torch.sparse_coo, requires_grad=True)
+where :math:`\bigoplus` defines the reduce operator. :attr:`reduce` is implemented only for
+CSR storage format on CPU device.
 
-        >>> b = torch.randn(3, 2, requires_grad=True)
-        >>> b
-        tensor([[-0.6479,  0.7874],
-                [-1.2056,  0.5641],
-                [-1.1716, -0.9923]], requires_grad=True)
+Args:
+    mat1 (Tensor): the first sparse matrix to be multiplied
+    mat2 (Tensor): the second matrix to be multiplied, which could be sparse or dense
+    reduce (str, optional): the reduction operation to apply for non-unique indices
+        (:obj:`"sum"`, :obj:`"mean"`, :obj:`"amax"`, :obj:`"amin"`). Default :obj:`"sum"`.
 
-        >>> y = torch.sparse.mm(a, b)
-        >>> y
-        tensor([[-0.3323,  1.8723],
-                [-1.8951,  0.7904]], grad_fn=<SparseAddmmBackward>)
-        >>> y.sum().backward()
-        >>> a.grad
-        tensor(indices=tensor([[0, 0, 0, 1, 1, 1],
-                               [0, 1, 2, 0, 1, 2]]),
-               values=tensor([ 0.1394, -0.6415, -2.1639,  0.1394, -0.6415, -2.1639]),
-               size=(2, 3), nnz=6, layout=torch.sparse_coo)
-    """)
+Shape:
+    The format of the output tensor of this function follows:
+    - sparse x sparse -> sparse
+    - sparse x dense -> dense
+
+Example::
+
+    >>> a = torch.tensor([[1., 0, 2], [0, 3, 0]]).to_sparse().requires_grad_()
+    >>> a
+    tensor(indices=tensor([[0, 0, 1],
+                           [0, 2, 1]]),
+           values=tensor([1., 2., 3.]),
+           size=(2, 3), nnz=3, layout=torch.sparse_coo, requires_grad=True)
+    >>> b = torch.tensor([[0, 1.], [2, 0], [0, 0]], requires_grad=True)
+    >>> b
+    tensor([[0., 1.],
+            [2., 0.],
+            [0., 0.]], requires_grad=True)
+    >>> y = torch.sparse.mm(a, b)
+    >>> y
+    tensor([[0., 1.],
+            [6., 0.]], grad_fn=<SparseAddmmBackward0>)
+    >>> y.sum().backward()
+    >>> a.grad
+    tensor(indices=tensor([[0, 0, 1],
+                           [0, 2, 1]]),
+           values=tensor([1., 0., 2.]),
+           size=(2, 3), nnz=3, layout=torch.sparse_coo)
+    >>> c = a.detach().to_sparse_csr()
+    >>> c
+    tensor(crow_indices=tensor([0, 2, 3]),
+           col_indices=tensor([0, 2, 1]),
+           values=tensor([1., 2., 3.]), size=(2, 3), nnz=3,
+           layout=torch.sparse_csr)
+    >>> y1 = torch.sparse.mm(c, b, 'sum')
+    >>> y1
+    tensor([[0., 1.],
+            [6., 0.]], grad_fn=<SparseMmReduceImplBackward0>)
+    >>> y2 = torch.sparse.mm(c, b, 'max')
+    >>> y2
+    tensor([[0., 1.],
+            [6., 0.]], grad_fn=<SparseMmReduceImplBackward0>)
+""")
 
 
 sampled_addmm = _add_docstr(_sparse.sparse_sampled_addmm, r"""
@@ -116,7 +141,6 @@ and :attr:`beta` are the scaling factors.
 
 .. note::
     :attr:`input` must be a sparse CSR tensor. :attr:`mat1` and :attr:`mat2` must be dense tensors.
-    This function is implemented only for tensors on CUDA devices.
 
 Args:
     input (Tensor): a sparse CSR matrix of shape `(m, n)` to be added and used to compute
@@ -148,47 +172,6 @@ Examples::
         col_indices=tensor([0, 1, 2]),
         values=tensor([ 0.1423, -0.3903, -0.0950]), device='cuda:0',
         size=(3, 3), nnz=3, layout=torch.sparse_csr)
-""")
-
-
-spmm_reduce = _add_docstr(_sparse.spmm_reduce, r"""
-sparse.spmm_reduce(input, weight, reduce, row_indices=None, ccol_indices=None, csr2csc=None) -> Tensor
-
-Reduce rows from dense matrices :attr:`weight` at the locations specified by the sparsity pattern of :attr:`input`.
-The matrix :attr:`input` is not added to the final result.
-
-For each element in :attr:`input` at index [i, j], pick the rows from :attr:`weight` specified by j,
-and reduce to :attr:`output` at row i.
-
-.. note::
-    :attr:`input` must be a sparse CSR tensor. :attr:`weight` must be dense tensors.
-    This function is implemented only for tensors on CPU device.
-
-Args:
-    input (Tensor): a sparse CSR matrix of shape `(m, n)`.
-    weight (Tensor): a dense matrix of shape `(m, k)` to be reduced.
-    reduce (str): the reduction operation to apply for non-unique indices
-        (:obj:`"sum"`, :obj:`"mean"`, :obj:`"max"`, :obj:`"min"`).
-    row_indices (Tensor, optional): row indices for each element in :attr:`input`, 1-D tensor of size `nse`.
-    ccol_indices (Tensor, optional): compressed col indices for each element in :attr:`input`, 1-D tensor of size `n + 1`.
-    csr2csc (Tensor, optional): permute pattern to convert :attr:`input` from CSR to CSC.
-
-Examples::
-
-    >>> crow_indices = torch.tensor([0, 1, 3, 4])
-    >>> col_indices = torch.tensor([2, 0, 1, 3])
-    >>> values = torch.tensor([1, 2, 3, 4])
-    >>> csr = torch.sparse_csr_tensor(crow_indices, col_indices, values, dtype=torch.float)
-    >>> csr
-    tensor(crow_indices=tensor([0, 1, 3, 4]),
-       col_indices=tensor([2, 0, 1, 3]),
-       values=tensor([1., 2., 3., 4.]), size=(3, 4), nnz=4,
-       layout=torch.sparse_csr)
-    >>> weight = torch.ones(4, 3)
-    >>> torch.sparse.spmm_reduce(csr, weight, "sum")
-    tensor([[1., 1., 1.],
-        [5., 5., 5.],
-        [4., 4., 4.]])
 """)
 
 def sum(input: Tensor, dim: DimOrDims = None,
@@ -398,3 +381,108 @@ Specifying a positive offset::
             [0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0]])
 """)
+
+
+class check_sparse_tensor_invariants:
+    """A tool to control checking sparse tensor invariants.
+
+The following options exists to manage sparsr tensor invariants
+checking in sparse tensor construction:
+
+1. Using a context manager:
+
+   .. code:: python
+
+       with torch.sparse.check_sparse_tensor_invariants():
+           run_my_model()
+
+2. Using a procedural approach:
+
+   .. code:: python
+
+       prev_checks_enabled = torch.sparse.check_sparse_tensor_invariants.is_enabled()
+       torch.sparse.check_sparse_tensor_invariants.enable()
+
+       run_my_model()
+
+       if not prev_checks_enabled:
+           torch.sparse.check_sparse_tensor_invariants.disable()
+
+3. Using function decoration:
+
+   .. code:: python
+
+       @torch.sparse.check_sparse_tensor_invariants()
+       def run_my_model():
+           ...
+
+       run_my_model()
+
+4. Using ``check_invariants`` keyword argument in sparse tensor constructor call.
+   For example:
+
+   >>> torch.sparse_csr_tensor([0, 1, 3], [0, 1], [1, 2], check_invariants=True)
+   Traceback (most recent call last):
+     File "<stdin>", line 1, in <module>
+   RuntimeError: `crow_indices[..., -1] == nnz` is not satisfied.
+    """
+
+    @staticmethod
+    def is_enabled():
+        r"""Returns True if the sparse tensor invariants checking is enabled.
+
+.. note::
+
+    Use :func:`torch.sparse.check_sparse_tensor_invariants.enable` or
+    :func:`torch.sparse.check_sparse_tensor_invariants.disable` to
+    manage the state of the sparse tensor invariants checks.
+        """
+        return torch._C._check_sparse_tensor_invariants()
+
+    @staticmethod
+    def enable():
+        r"""Enable sparse tensor invariants checking in sparse tensor constructors.
+
+.. note::
+
+    By default, the sparse tensor invariants checks are disabled. Use
+    :func:`torch.sparse.check_sparse_tensor_invariants.is_enabled` to
+    retrieve the current state of sparse tensor invariants checking.
+
+.. note::
+
+    The sparse tensor invariants check flag is effective to all sparse
+    tensor constructors, both in Python and ATen.
+
+    The flag can be locally overridden by the ``check_invariants``
+    optional argument of the sparse tensor constructor functions.
+        """
+        torch._C._set_check_sparse_tensor_invariants(True)
+
+    @staticmethod
+    def disable():
+        r"""Disable sparse tensor invariants checking in sparse tensor constructors.
+
+See :func:`torch.sparse.check_sparse_tensor_invariants.enable` for more information.
+        """
+        torch._C._set_check_sparse_tensor_invariants(False)
+
+    # context manager support
+    def __init__(self, enable=True):
+        self.state = enable
+        self.saved_state = self.is_enabled()
+
+    def __enter__(self):
+        torch._C._set_check_sparse_tensor_invariants(self.state)
+
+    def __exit__(self, type, value, traceback):
+        torch._C._set_check_sparse_tensor_invariants(self.saved_state)
+
+    # decorator support
+    def __call__(self, mth):
+
+        def test_mth(*args, **kwargs):
+            with type(self)(self.state):
+                return mth(*args, **kwargs)
+
+        return test_mth

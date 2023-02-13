@@ -14,7 +14,7 @@ from torch.testing._internal.common_utils import run_tests
 
 class Net(nn.Module):
     def __init__(self):
-        super(Net, self).__init__()
+        super().__init__()
         self.fc1 = nn.Linear(2, 10, bias=False)
         self.fc2 = nn.Linear(10, 50, bias=False)
         self.fc3 = nn.Linear(50, 4, bias=False)
@@ -25,6 +25,52 @@ class Net(nn.Module):
         x = self.relu(self.fc2(x))
         x = self.fc3(x)
         return F.softmax(x, dim=1)
+
+
+class ReplicateStateDictTest(MultiProcessTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._spawn_processes()
+
+    def tearDown(self):
+        super().tearDown()
+        try:
+            os.remove(self.file_name)
+        except OSError:
+            pass
+
+    def _check_state_dict_parity(self, sd_1, sd_2):
+        for k1, k2 in zip(sd_1.keys(), sd_2.keys()):
+            self.assertEqual(k1, k2)
+
+        for v1, v2 in zip(sd_1.values(), sd_2.values()):
+            self.assertEqual(v1, v2)
+
+    def test_replicate_single_module_save_load(self):
+        """
+        Tests that replicate() on a single module state_dict
+        matches local module state_dict.
+        """
+        model = Net()
+        replicate_model = replicate(deepcopy(model))
+        local_sd = model.state_dict()
+        ddp_sd = replicate_model.state_dict()
+        self._check_state_dict_parity(local_sd, ddp_sd)
+
+    def test_replicate_non_root_multiple_save_load(self):
+        """
+        Tests tha replicate() on multiple submodules matches
+        local module state_dict.
+        """
+        model = Net()
+        replicate_model = deepcopy(model)
+        replicate(replicate_model.fc1)
+        replicate(replicate_model.fc2)
+        replicate(replicate_model.fc3)
+
+        local_sd = model.state_dict()
+        ddp_sd = replicate_model.state_dict()
+        self._check_state_dict_parity(local_sd, ddp_sd)
 
 
 class ReplicateTest(MultiProcessTestCase):
@@ -67,14 +113,10 @@ class ReplicateTest(MultiProcessTestCase):
             step_model(
                 replicate_mod,
                 input[
-                    self.rank
-                    * local_batch_size : (self.rank + 1)
-                    * local_batch_size
+                    self.rank * local_batch_size : (self.rank + 1) * local_batch_size
                 ],
                 target[
-                    self.rank
-                    * local_batch_size : (self.rank + 1)
-                    * local_batch_size
+                    self.rank * local_batch_size : (self.rank + 1) * local_batch_size
                 ],
             )
 

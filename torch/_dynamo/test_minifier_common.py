@@ -31,12 +31,6 @@ class MinifierTestBase(torch._dynamo.test_case.TestCase):
         cls._debug_dir_obj.cleanup()
         cls._exit_stack.close()
 
-    def setUp(self):
-        super().setUp()
-
-    def tearDown(self):
-        super().tearDown()
-
     # Search for the name of the first function defined in a code string.
     def _get_fn_name(self, code):
         fn_name_match = re.search(r"def (\w+)\(", code)
@@ -55,9 +49,6 @@ class MinifierTestBase(torch._dynamo.test_case.TestCase):
             r"(\S+)minifier_launcher.py", proc.stderr.decode("utf-8")
         )
         if repro_dir_match is not None:
-            # Print repro directory for debugging generated code.
-            # Make sure to comment out `shutil.rmtree...` above as well.
-            print("repro dir:", repro_dir_match.group(1))
             return proc, repro_dir_match.group(1)
         return proc, None
 

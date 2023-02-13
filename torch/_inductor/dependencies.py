@@ -7,7 +7,6 @@ from typing import Callable, cast, Dict, List, Optional, Set, Tuple, Union
 
 import sympy
 
-from . import config
 from .codegen.common import index_prevent_reordering
 from .utils import (
     get_dtype_size,
@@ -21,7 +20,7 @@ from .virtualized import V
 
 log = logging.getLogger(__name__)
 
-Dep = Union["MemoryDep", "StarDep"]
+Dep = Union["MemoryDep", "StarDep", "WeakDep"]
 
 
 class MemoryDep(typing.NamedTuple):
@@ -122,6 +121,24 @@ class StarDep(typing.NamedTuple):
         return False
 
 
+# Used for tracking mutation ordering
+# if A reads a buffer and B mutates it
+# B must be ordered after A
+class WeakDep(typing.NamedTuple):
+    name: str
+
+    def rename(self, renames: Dict[str, str]) -> "WeakDep":
+        if self.name in renames:
+            return WeakDep(renames[self.name])
+        return self
+
+    def numbytes_hint(self):
+        return 1  # Purely inserted for ordering, not an actual dep
+
+    def is_contiguous(self) -> bool:
+        return False
+
+
 class IndexExprDep(typing.NamedTuple):
     index: sympy.Expr  # type: ignore[assignment]
     size: Tuple[sympy.Expr, ...]
@@ -144,10 +161,10 @@ class ReadWrites:
             self.var_ranges,
         )
 
-    def with_read(self, name: str) -> "ReadWrites":
-        assert isinstance(name, str)
+    def with_read(self, dep: Dep) -> "ReadWrites":
+        assert isinstance(dep, (WeakDep, StarDep))
         return ReadWrites(
-            set.union(self.reads, {StarDep(name)}),
+            set.union(self.reads, {dep}),
             self.writes,
             self.index_exprs,
             self.range_vars,
@@ -164,24 +181,24 @@ class ReadWrites:
             index_exprs,
         )
 
+    def remove_reads(self, rem_reads):
+        return ReadWrites(
+            self.reads - rem_reads,
+            self.writes,
+            self.index_exprs,
+            self.range_vars,
+            self.var_ranges,
+        )
 
-class RecordLoadStore(V.MockHandler):  # type: ignore[name-defined]
+
+class _RecordLoadStoreInner(V.MockHandler):
     def __init__(self, var_ranges: VarRanges, normalize: bool):
-        super(RecordLoadStore, self).__init__()
+        super().__init__()
         self._reads: Set[MemoryDep] = set()
         self._writes: Set[MemoryDep] = set()
         self._index_exprs: Set[IndexExprDep] = set()
         self._var_ranges: VarRanges = var_ranges
         self._normalize: bool = normalize
-
-    # Truncate the expr str by a threshold to prevent it's too long
-    # and cause process hanging. The result is not used.
-    # https://github.com/pytorch/torchdynamo/issues/1352
-    @staticmethod
-    def truncate_expr(expr):
-        if len(expr) > config.realize_bytes_threshold:
-            expr = f"{expr[:config.realize_bytes_threshold]}..."
-        return expr
 
     def canonicalize(
         self, index: sympy.Expr
@@ -228,6 +245,14 @@ class RecordLoadStore(V.MockHandler):  # type: ignore[name-defined]
         canonicalized_index, canonicalized_size = self.canonicalize(index)
         self._index_exprs.add(IndexExprDep(canonicalized_index, canonicalized_size))
         return f"index_expr({sympy_str(index)}, {dtype})"
+
+
+class RecordLoadStore(V.KernelFormatterHandler):
+    def __init__(self, var_ranges: VarRanges, normalize: bool):
+        parent_handler = _RecordLoadStoreInner(
+            var_ranges=var_ranges, normalize=normalize
+        )
+        super().__init__(parent_handler=parent_handler)
 
 
 def var_builder(prefix: str) -> Tuple[VarRanges, Callable[[sympy.Expr], sympy.Symbol]]:
@@ -279,8 +304,13 @@ def extract_read_writes(
     else:
         range_vars = [*itertools.chain(*args)]
 
+    inner = rw.parent_handler
     return ReadWrites(
-        set(rw._reads), set(rw._writes), rw._index_exprs, range_vars, var_ranges
+        set(inner._reads),
+        set(inner._writes),
+        inner._index_exprs,
+        range_vars,
+        var_ranges,
     )
 
 
